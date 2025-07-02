@@ -1,0 +1,208 @@
+package compito19giu2024;
+
+import static java.lang.Thread.sleep;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.concurrent.Semaphore;
+
+/**
+ *
+ * @author pierf
+ */
+public class Compito19Giu2024 {
+
+    /**
+     * @param args the command line arguments
+     */
+    public static void main(String[] args) throws InterruptedException {
+        int N = 4;
+        int K = 10;
+        int TG = 500;
+        int NA = 4;
+        int L = 10;
+        int T = 100;
+        
+        ArrayGenerator ag = new ArrayGenerator(TG, K);
+        ResourceManager rm = new ResourceManager(NA);
+        ResultQueue rq = new ResultQueue(L);
+        
+        ProcessorThread[] pt = new ProcessorThread[N];
+        for(int i=0;i<pt.length; i++) {
+            pt[i] = new ProcessorThread(ag, rm, rq, T);
+            pt[i].setName("PT"+i);
+            pt[i].start();
+        }
+        OutputThread[] ot = new OutputThread[2];
+        for(int i=0;i<ot.length;i++) {
+            ot[i] = new OutputThread(rq);
+            ot[i].setName("OT"+i);
+            ot[i].start();
+        }
+        sleep(10000);
+        
+        for(ProcessorThread ptt:pt)
+            ptt.interrupt();
+        for(OutputThread ott:ot)
+            ott.interrupt();
+        
+        int tproc = 0;
+        for(ProcessorThread ptt:pt) {
+            ptt.join();
+            System.out.println(ptt.getName()+" n proc: "+ptt.nproc);
+            tproc+=ptt.nproc;
+        }
+        
+        int tout = 0;
+        for(OutputThread ott: ot) {
+            ott.join();
+            System.out.println(ott.getName()+" n out:"+ott.nout);
+            tout += ott.nout;
+        }
+        
+        System.out.println("n gen: "+ag.c+" tot proc: "+tproc+" queue:"+rq.data.size()+" totout:" + tout+ " NR:"+rm.nAvailable.availablePermits());
+    }    
+}
+
+class ArrayGenerator {
+    int c=0;
+    int TG;
+    int K;
+    Semaphore mutex = new Semaphore(1);
+
+    public ArrayGenerator(int TG,int K) {
+        this.TG = TG;
+        this.K = K;
+    }
+    
+    public int[] generate() throws InterruptedException {
+        mutex.acquire();
+        int[] r = new int[K];
+        for(int i=0;i<K;i++) {
+            r[i]=c+i+1;
+        }
+        sleep(TG);
+        c++;
+        mutex.release();
+        return r;
+    }
+}
+
+class ResourceManager {
+    Semaphore nAvailable;
+
+    public ResourceManager(int NA) {
+        nAvailable = new Semaphore(NA);
+    }
+    
+    public void getResources(int n) throws InterruptedException {
+        nAvailable.acquire(n);
+    }
+    
+    public void release(int n) {
+        nAvailable.release(n);
+    }
+}
+
+class Result {
+    int[] data;
+    int result;
+
+    public Result(int[] data, int result) {
+        this.data = data;
+        this.result = result;
+    }
+
+    @Override
+    public String toString() {
+        return Arrays.toString(data)+"->"+result;
+    }
+}
+
+class ResultQueue {
+    ArrayList<Result> data = new ArrayList<>();
+    Semaphore mutex = new Semaphore(1);
+    Semaphore pieni = new Semaphore(0);
+    Semaphore vuoti;
+
+    public ResultQueue(int L) {
+        vuoti = new Semaphore(L);
+    }
+    
+    public void put(Result r) throws InterruptedException {
+        vuoti.acquire();
+        mutex.acquire();
+        data.add(r);
+        mutex.release();
+        pieni.release();
+    }
+    
+    public Result[] get(int n) throws InterruptedException {
+        pieni.acquire(n);
+        mutex.acquire();
+        Result[] r = new Result[n];
+        for(int i=0;i<n;i++)
+            r[i] = data.removeFirst();
+        mutex.release();
+        vuoti.release(n);
+        return r;
+    }
+    
+}
+
+class ProcessorThread extends Thread {
+    ArrayGenerator ag;
+    ResourceManager rm;
+    ResultQueue rq;
+    int T;
+    int nproc = 0;
+
+    public ProcessorThread(ArrayGenerator ag, ResourceManager rm, ResultQueue rq, int T) {
+        this.ag = ag;
+        this.rm = rm;
+        this.rq = rq;
+        this.T = T;
+    }
+    
+    public void run() {
+        try {
+            while(true) {
+                int[] v = ag.generate();
+                int nr = 1+(int)(Math.random()*2);
+                rm.getResources(nr);
+                int s = 0;
+                try {
+                    for(int vv: v)
+                        s+=vv;
+                    sleep(T);
+                } finally {
+                    rm.release(nr);
+                }
+                nproc++;
+                rq.put(new Result(v,s));
+            }
+        } catch(InterruptedException e) {
+            
+        }
+    }
+}
+
+class OutputThread extends Thread {
+    ResultQueue rq;
+    int nout = 0;
+
+    public OutputThread(ResultQueue rq) {
+        this.rq = rq;
+    }
+    
+    public void run() {
+        try {
+            while(true) {
+                Result[] r = rq.get(2);
+                System.out.println(getName()+" "+Arrays.toString(r));
+                nout++;
+            }
+        } catch(InterruptedException e) {
+            
+        }
+    }
+}

@@ -1,0 +1,227 @@
+package compito07giu2024;
+
+import static java.lang.Thread.sleep;
+import java.util.ArrayList;
+import java.util.Arrays;
+
+/**
+ *
+ * @author pierf
+ */
+public class Compito07Giu2024 {
+
+    /**
+     * @param args the command line arguments
+     */
+    public static void main(String[] s) throws InterruptedException {
+        int N = 5;
+        int M = 3;
+        int X = 100;
+        int T = 100;
+        int D = 200;
+        int L = 10;
+        
+        QueueManager qm = new QueueManager(L, N);
+        ResultQueue rq = new ResultQueue();
+        
+        GeneratorThread[] gg = new GeneratorThread[N];
+        for(int i=0; i<N; i++) {
+            gg[i] = new GeneratorThread(qm, i, X);
+            gg[i].setName("G"+i);
+            gg[i].start();
+        }
+        
+        ProcessorThread[] pp = new ProcessorThread[M];
+        for(int i=0;i<M;i++) {
+            pp[i] = new ProcessorThread(qm, T, D, rq);
+            pp[i].setName("P"+i);
+            pp[i].start();
+        }
+        
+        PrinterThread pt = new PrinterThread(rq);
+        pt.start();
+        Thread.sleep(10000);
+        for(GeneratorThread g: gg) {
+            g.interrupt();
+        }
+        for(ProcessorThread p: pp) {
+            p.interrupt();
+        }
+        pt.interrupt();
+        
+        int nGen = 0;
+        for(GeneratorThread g: gg) {
+            g.join();
+            System.out.println(g.getName()+" gen:"+g.nGen);
+            nGen += g.nGen;
+        }
+        System.out.println("tot gen:"+nGen);
+        for(ProcessorThread p: pp) {
+            p.join();
+            System.out.println(p.getName()+" proc:"+p.nProc);
+        }
+        pt.interrupt();
+        pt.join();
+        System.out.println("n print: "+pt.nPrt);
+        for(int i=0;i<qm.data.length; i++) {
+            System.out.println("coda G"+i+": "+qm.data[i].size());
+        }
+        
+        System.out.println("coda rq: "+rq.data.size());
+        System.out.println();
+    }
+    
+}
+
+class Data {
+    int prog;
+    Object[] data;
+    Object result = null;
+
+    public Data(int prog, Object[] data) {
+        this.prog = prog;
+        this.data = data;
+    }
+}
+
+class QueueManager {
+    ArrayList[] data = null;
+    int L;
+    int prog = 0;
+
+    public QueueManager(int L, int N) {
+        this.L = L;
+        data = new ArrayList[N];
+        for(int i=0;i<N; i++)
+            data[i] = new ArrayList();
+    }
+    
+    public synchronized void put(int idGen, Object o) throws InterruptedException {
+        while(data[idGen].size()==L)
+            wait();
+        data[idGen].add(o);
+        notifyAll();
+    } 
+    
+    private boolean oneEmptyQueue() {
+        for(int i=0;i<data.length; i++) {
+            if(data[i].isEmpty())
+                return true;
+        }
+        return false;
+    }
+    public synchronized Data get() throws InterruptedException {
+        while(oneEmptyQueue())
+            wait();
+        Object[] d = new Object[data.length];
+        for(int i=0;i<data.length;i++) {
+            d[i] = data[i].remove(0);
+        }
+        notifyAll();
+        return new Data(prog++, d);
+    }
+}
+
+class ResultQueue {
+    ArrayList<Data> data = new ArrayList<>();
+    
+    public synchronized void put(Data d) {
+        data.add(d);
+        notify();
+    }
+    
+    private Data find(int p) {
+        for(Data d: data) {
+            if (d.prog == p)
+                return d;
+        }
+        return null;
+    }
+    public synchronized Data get(int p) throws InterruptedException {
+        Data r;
+        while( (r = find(p)) == null)
+            wait();
+        data.remove(r);
+        return r;
+    }
+}
+
+class GeneratorThread extends Thread {
+    QueueManager qm;
+    int id;
+    int X;
+    int nGen;
+
+    public GeneratorThread(QueueManager qm, int id, int X) {
+        this.qm = qm;
+        this.id = id;
+        this.X = X;
+    }
+    
+    public void run() {
+        try {
+            int p = id+1;
+            while(true) {
+                qm.put(id, p++);
+                nGen++;
+                sleep(X);
+            }
+        } catch(InterruptedException e) {
+            System.out.println(getName()+" interrotto");
+        }
+    }
+}
+
+class ProcessorThread extends Thread {
+    QueueManager qm;
+    int T, D;
+    ResultQueue rq;
+    int nProc = 0;
+
+    public ProcessorThread(QueueManager qm, int T, int D, ResultQueue rq) {
+        this.qm = qm;
+        this.T = T;
+        this.D = D;
+        this.rq = rq;
+    }
+
+    public void run() {
+        try {
+            while(true) {
+                Data d = qm.get();
+                int s = 0;
+                for(Object v:d.data) {
+                    s+= (int)v;
+                }
+                d.result = s;
+                sleep(T+(int)(Math.random()*D));
+                nProc++;
+                rq.put(d);
+            }
+        } catch(InterruptedException e) {
+            
+        }
+    }
+}
+
+class PrinterThread extends Thread {
+    ResultQueue rq;
+    int nPrt = 0;
+
+    public PrinterThread(ResultQueue rq) {
+        this.rq = rq;
+    }
+    
+    public void run() {
+        try {
+            int p = 0;
+            while(true) {
+                Data d = rq.get(p++);
+                System.out.println(d.prog+": "+Arrays.toString(d.data)+" -> "+d.result);
+                nPrt++;
+            }
+        } catch(InterruptedException e) {
+            
+        }
+    }
+}

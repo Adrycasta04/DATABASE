@@ -1,0 +1,191 @@
+package compito19lug2024;
+
+import static java.lang.Thread.sleep;
+import java.util.ArrayList;
+import java.util.concurrent.Semaphore;
+
+/**
+ *
+ * @author pierf
+ */
+public class Compito19Lug2024 {
+
+    /**
+     * @param args the command line arguments
+     */
+    static public void main(String[] a) throws InterruptedException {
+        int K = 100;
+        int N = 10; //n client
+        int M = 3;  //n worker
+        int T = 100;
+        
+        PriorityQueue pq = new PriorityQueue(K);
+        
+        System.out.println("START");
+        ClientThread[] cts= new ClientThread[N];
+        for(int i=0;i<cts.length; i++) {
+            cts[i] = new ClientThread(pq, i);
+            cts[i].start();
+        }
+        
+        WorkerThread[] wts = new WorkerThread[M];
+        for(int i=0;i<wts.length; i++) {
+            wts[i] = new WorkerThread(pq, T);
+            wts[i].setName("WT"+i);
+            wts[i].start();
+        }
+        
+        Thread.sleep(10000);
+
+        System.out.println("STOP CLIENTS");
+        for(ClientThread ct: cts) {
+            ct.setStop(); 
+        }
+        for(ClientThread ct: cts) {
+            ct.join();
+        }
+        
+        System.out.println("STATS");
+        for(WorkerThread wt: wts) {
+            wt.interrupt();
+            wt.join();
+            System.out.println(wt.getName()+" nOps:"+wt.nOps);
+        }
+
+        for(ClientThread ct: cts) {
+            ct.join();
+            System.out.println("CT"+ct.id+" nOps:"+ct.nOp+" avg:"+((float)(ct.sumTime)/ct.nOp)+"ms");
+        }    
+    }
+
+}
+
+class Msg {
+    Object value;
+    ClientThread ct;
+
+    public Msg(Object value, ClientThread ct) {
+        this.value = value;
+        this.ct = ct;
+    }
+    
+}
+
+class PriorityQueue {
+    ArrayList<Msg>[] queues = new ArrayList[3];
+    Semaphore[] mutex = new Semaphore[3];
+    Semaphore[] vuote = new Semaphore[3];
+    Semaphore pieni = new Semaphore(0);
+
+    public PriorityQueue(int K) {
+        for(int i=0; i<queues.length; i++) {
+            queues[i] = new ArrayList<>();
+            mutex[i] = new Semaphore(1);
+            vuote[i] = new Semaphore(K);
+        }
+    }
+    
+    public void add(int p, Msg m) throws InterruptedException {
+        vuote[p].acquire();
+        mutex[p].acquire();
+        queues[p].add(m);
+        mutex[p].release();
+        
+        pieni.release();
+    }
+    
+    public Msg get() throws InterruptedException {
+        pieni.acquire();
+        Msg r;
+        for(int p=0;p<queues.length; p++) {
+            mutex[p].acquire();
+            if(!queues[p].isEmpty()) {
+              r = queues[p].removeFirst();
+              mutex[p].release();
+              vuote[p].release();
+              return r;
+            }
+            mutex[p].release();
+        }
+        return null;
+    }
+}
+
+class ClientThread extends Thread {
+    PriorityQueue pq;
+    long sumTime = 0;
+    int nOp = 0;
+    private boolean stop = false;
+    int id;
+    Semaphore waitResult = new Semaphore(0); //inizializzato a 0 per aspettare
+    Object result = null;
+
+    public ClientThread(PriorityQueue pq, int id) {
+        this.pq = pq;
+        this.id = id;
+    }
+
+    public void setResult(Object r) {
+        result = r;
+        waitResult.release();
+    }
+    
+    public void setStop() {
+        stop = true;
+    }
+    
+    public void run() {
+        try {
+            int c = 1; 
+            int p; 
+            if(id <=1)
+                p = 0;
+            else if(id <=3)
+                p = 1;
+            else
+                p = 2;
+            
+            while(!stop) {
+                Msg m = new Msg(c, this);
+                long sendTime = System.currentTimeMillis();
+                pq.add(p, m);
+                
+                //aspetta risultato dal worker
+                waitResult.acquire();
+                //calcola tempo impiegato
+                long elapTime=System.currentTimeMillis() - sendTime;
+   
+                sumTime += elapTime;
+                nOp++;
+                c++;
+                System.out.println("CT"+id+" pri:"+p+" v:"+m.value+" r:"+result+" time:"+elapTime);
+            }
+        } catch(InterruptedException e) {
+            
+        }
+    }
+}
+
+class WorkerThread extends Thread {
+    PriorityQueue pq;
+    int T;
+    int nOps = 0;
+
+    public WorkerThread(PriorityQueue pq, int T) {
+        this.pq = pq;
+        this.T = T;
+    }
+    
+    public void run() {
+        try {
+            while(true) {
+                Msg m = pq.get();
+                sleep(T);
+                m.ct.setResult(((int)m.value) * 2);
+                nOps++;
+            }
+        } catch(InterruptedException e) {
+            
+        }
+    }
+}

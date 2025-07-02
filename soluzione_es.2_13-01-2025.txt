@@ -1,0 +1,227 @@
+package compito13gen2025;
+
+import static java.lang.Thread.interrupted;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Random;
+
+/**
+ *
+ * @author pierf
+ */
+public class Compito13Gen2025 {
+
+    /**
+     * @param args the command line arguments
+     */
+    static public void main(String[] args) throws InterruptedException {
+       int K=10; //tipi di risorsa
+       int S=6;  //n istanze risorsa per tipo
+       int X=5;  //lunghezza massima coda
+       int N=5;  //n client
+       int M=3;  //n worker
+       int T=100, TA=200; //tempo di work [T, T+TA)
+       
+       Queue q = new Queue(X);
+       GestoreRisorse gr = new GestoreRisorse(K, S);
+       
+       WorkerThread[] wt = new WorkerThread[M];
+       for(int i=0;i<M; i++) {
+           wt[i] = new WorkerThread(q, gr, T, TA);
+           wt[i].setName("WT"+i);
+           wt[i].start();
+       }
+       
+       ClientThread[] ct = new ClientThread[N];
+       for(int i=0;i<N; i++) {
+           ct[i] = new ClientThread(q);
+           ct[i].setName("CT"+i);
+           ct[i].start();
+        }    
+       
+        Thread.sleep(10000);
+       
+        System.out.println("INTERROMPO gli worker");
+        for(WorkerThread w: wt) {
+           w.interrupt();
+        }
+        for(WorkerThread w: wt) {
+           w.join();
+        }
+        System.out.println("INTERROMPO i client");
+        for(ClientThread c: ct) {
+            if(c.isAlive())
+                c.interrupt();
+            else
+                System.out.println(c.getName()+" GIA FINITO");
+        }
+        for(ClientThread c: ct) {
+            c.join();
+            System.out.println(c.getName()+" "+c.nOp);
+        }
+        for(WorkerThread w: wt) {
+            System.out.println(w.getName()+" "+w.nOp);
+        }
+        System.out.println("risorse: "+gr+" coda:"+q.data.size());
+    }
+
+    
+}
+
+class GestoreRisorse {
+    int[] resCount;
+
+    public GestoreRisorse(int K, int S) {
+        resCount = new int[K];
+        for(int i=0;i<K; i++)
+            resCount[i] = S;
+    }
+    
+    synchronized void acquire(int[] r) throws InterruptedException {
+        while(!available(r))
+            wait();
+        for(int i=0;i<r.length; i++)
+            resCount[i]-=r[i];
+    }
+    
+    private boolean available(int[] r) {
+        for(int i=0;i<r.length; i++)
+            if(resCount[i]<r[i])
+                return false;
+        return true;
+    }
+    
+    synchronized void release(int[] r) {
+        for(int i=0;i<r.length; i++)
+            resCount[i] += r[i];
+        notifyAll();
+    }
+    
+    public String toString() {
+        return Arrays.toString(resCount);
+    }
+}
+
+class Msg {
+    Object in, out = null;
+    int[] resources = null;
+    ClientThread ct;
+
+    public Msg(Object in, ClientThread ct) {
+        this.in = in;
+        this.ct = ct;
+    }
+}
+
+class Queue {
+    List<Msg> data = new ArrayList<>();
+    int X;
+
+    public Queue(int X) {
+        this.X = X;
+    }
+    
+    synchronized void add(Msg m) throws InterruptedException {
+        while(data.size()>X)
+            wait();
+        data.add(m);
+        notifyAll();
+    }
+    
+    synchronized Msg get() throws InterruptedException {
+        while(data.isEmpty())
+            wait();
+        Msg m = data.remove(0);
+        notifyAll();
+        return m;
+    }
+}
+
+class ClientThread extends Thread {
+    Queue q;
+    Msg result = null;
+    int nOp = 0;
+
+    public ClientThread(Queue q) {
+        this.q = q;
+    }
+    
+    public void run() {
+        try {
+            int v = 1;
+            while(true) {
+                result = null;
+                q.add(new Msg(v++, this));
+                waitResult();
+                System.out.println(getName()+" "+result.in+" -> "+result.out+" res:"+Arrays.toString(result.resources));
+                if(result.out == null) {
+                    System.out.println(getName()+" FAIL");
+                    break;
+                }
+                nOp++;
+            }
+        } catch (InterruptedException e) {
+            System.out.println(getName()+" INTERRUPTED");
+        }
+    }
+    
+    synchronized void waitResult() throws InterruptedException{
+        while(result == null)
+            wait();
+    }
+    
+    synchronized void setResult(Msg m) {
+        result = m;
+        notify();
+    }
+}
+
+class WorkerThread extends Thread {
+    Queue q;
+    GestoreRisorse gr;
+    int T, TA;
+    int nOp = 0;
+
+    public WorkerThread(Queue q, GestoreRisorse gr, int T, int TA) {
+        this.q = q;
+        this.gr = gr;
+        this.T = T;
+        this.TA = TA;
+    }
+    
+    @Override
+    public void run() {
+        try {
+            while(true) {
+                Msg m = q.get();
+                int K = gr.resCount.length;
+                int[] r = new int[K];
+                for(int i=0;i<K;i++) {
+                    r[i] = (int)(Math.random()*3);
+                }
+                try {
+                    //System.out.println(getName()+" "+Arrays.toString(r));
+                    gr.acquire(r);
+                    try {
+                        sleep(T+(int)(Math.random()*TA));
+                        m.out = ((int)m.in)*2;
+                        m.resources = r;
+                        nOp++;
+                        m.ct.setResult(m);
+                    } finally {
+                        gr.release(r);
+                    }
+                } catch(InterruptedException e) {
+                    m.out = null;
+                    m.ct.setResult(m);
+                    System.out.println(getName()+" FAILED");
+                    break;
+                }
+            }
+        } catch (InterruptedException e) {
+            System.out.println(getName()+" INTERRUPTED");
+        }
+    }
+}
+

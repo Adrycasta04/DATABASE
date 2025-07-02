@@ -1,0 +1,176 @@
+package compito22apr2025;
+
+import java.util.ArrayList;
+import java.util.Arrays;
+
+/**
+ *
+ * @author pierf
+ */
+public class Compito22Apr2025 {
+
+    /**
+     * @param args the command line arguments
+     */
+    public static void main(String[] args) throws InterruptedException {
+        int N = 10; //n client
+        int M = 4;  //n worker
+        int K = 4;  //n msg inseriti dal client
+        int X = 40; //lunghezza massima coda (deve essere >=K)
+        int TW = 100, DW = 200; //tempo di calcolo risultato
+        
+        MsgQueue mq = new MsgQueue(X);
+        
+        ClientThread[] cts = new ClientThread[N];
+        for(int i=0;i<cts.length; i++) {
+            cts[i] = new ClientThread(mq, K);
+            cts[i].setName("CT"+i);
+            cts[i].start();
+        }
+        
+        WorkerThread[] wts = new WorkerThread[M];
+        for(int i=0; i<wts.length; i++) {
+            wts[i] = new WorkerThread(mq, TW, DW);
+            wts[i].setName("WT"+i);
+            wts[i].start();
+        }
+        
+        Thread.sleep(10000);
+        
+        for(ClientThread ct: cts)
+            ct.setToStop();
+        for(ClientThread ct: cts)
+            ct.join();
+        for(WorkerThread wt: wts) {
+            wt.interrupt();
+            wt.join();
+        }
+        for(ClientThread ct: cts) {
+            System.out.println(ct.getName()+" nProc: "+ct.nProc+" avgTime: "+(ct.totTime/ct.nProc)+"ms");
+        }
+        for(WorkerThread wt: wts) {
+            System.out.println(wt.getName()+" nProc: "+wt.nProc);
+        }
+    }
+    
+}
+
+class Msg {
+    Object v;
+    Object result = null;
+    ClientThread ct;
+
+    public Msg(Object v, ClientThread ct) {
+        this.v = v;
+        this.ct = ct;
+    }
+    
+    public String toString() {
+        return v+"->"+result;
+    }
+}
+
+class MsgQueue {
+    ArrayList<Msg> dati = new ArrayList<>();
+    int X;
+
+    public MsgQueue(int X) {
+        this.X = X;
+    }
+    
+    public synchronized void add(Msg[] mm) throws InterruptedException {
+        while(dati.size()+mm.length>X)
+            wait();
+        for(Msg m : mm)
+            dati.add(m);
+        notifyAll();
+    }
+    
+    public synchronized Msg get() throws InterruptedException {
+        while(dati.size()==0)
+            wait();
+        Msg r = dati.remove(0);
+        notifyAll();
+        return r;
+    }
+}
+
+class ClientThread extends Thread {
+    MsgQueue q;
+    int K;
+    int nResults = 0;
+    boolean toStop = false;
+    int totTime = 0;
+    int nProc = 0;
+
+    public ClientThread(MsgQueue q, int K) {
+        this.q = q;
+        this.K = K;
+    }
+    
+    protected Msg[] genMsgs() {
+        Msg[] mm = new Msg[K];
+        for(int i=0;i<K; i++) {
+            mm[i] = new Msg(i+1, this);
+        }
+        return mm;
+    }
+    
+    synchronized private void waitResults() throws InterruptedException {
+        while(nResults < K)
+            wait();
+    }
+    
+    synchronized public void addResult() {
+        nResults++;
+        notifyAll();
+    }
+    
+    public void setToStop() {
+        toStop = true;
+    }
+    
+    public void run() {
+        try {
+            while(!toStop) {
+                long startTime = System.currentTimeMillis();
+                Msg[] mm = genMsgs();
+                q.add(mm);
+                nResults = 0;
+                waitResults();
+                long elapTime = System.currentTimeMillis() - startTime;
+                totTime += elapTime;
+                nProc++;
+                System.out.println(getName()+" "+Arrays.toString(mm)+" elap:"+elapTime+"ms");                
+            }
+        } catch(InterruptedException e) {
+            System.out.println(getName()+" interrotto");
+        }
+    }
+}
+
+class WorkerThread extends Thread{
+    MsgQueue mq;
+    int TW, DW;
+    int nProc = 0;
+
+    public WorkerThread(MsgQueue mq, int TW, int DW) {
+        this.mq = mq;
+        this.TW = TW;
+        this.DW = DW;
+    }
+    
+    public void run() {
+        try {
+            while(true) {
+                Msg m = mq.get();
+                sleep(TW+(int)(Math.random() * DW));
+                m.result = (int)m.v * 2;
+                m.ct.addResult();
+                nProc++;
+            }
+        } catch(InterruptedException e) {
+            System.out.println(getName()+" interrotto");
+        }
+    }
+}

@@ -1,0 +1,285 @@
+package compito03feb2025;
+
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.concurrent.Semaphore;
+
+/**
+ *
+ * @author pierf
+ */
+public class Compito03Feb2025 {
+
+    /**
+     * @param args the command line arguments
+     */
+    public static void main(String[] args) throws InterruptedException {
+        int K = 10;
+        int TG = 0;
+        int DG = 0;
+        int T = 0;
+        int N = 4;
+        int M = 4;
+        int S = 10;
+        
+        SharedArray sa = new SharedArray(K);
+        SampleDataQueue sdqIn = new SampleDataQueue();
+        SampleDataQueue sdqOut = new SampleDataQueue(S);
+        
+        WriterThread[] wts = new WriterThread[N];
+        for(int i=0;i<N; i++) {
+            wts[i] = new WriterThread(sa, TG, DG, K);
+            wts[i].setName("WT"+i);
+            wts[i].start();
+        }
+        
+        SamplerThread st = new SamplerThread(sa, sdqIn, T);
+        st.setName("ST");
+        st.start();
+        
+        ProcessorThread[] pts= new ProcessorThread[M];
+        for(int i=0; i<M; i++) {
+            pts[i] = new ProcessorThread(sdqIn, sdqOut);
+            pts[i].setName("PT"+i);
+            pts[i].start();
+        }
+        
+        PrinterThread[] prts = new PrinterThread[2];
+        for(int i=0;i<prts.length; i++) {
+            prts[i] = new PrinterThread(sdqOut);
+            prts[i].setName("PRT"+i);
+            prts[i].start();
+        }
+        
+        Thread.sleep(10000);
+        for(WriterThread wt: wts) {
+            wt.interrupt();
+            wt.join();
+        }
+        
+        st.interrupt();
+        st.join();
+        
+        for(ProcessorThread pt: pts) {
+            pt.interrupt();
+            pt.join();
+        }
+        
+        for(PrinterThread pt: prts) {
+            pt.interrupt();
+            pt.join();
+        }
+        
+        int nOps = 0;
+        for(WriterThread wt: wts) {
+            System.out.println(wt.getName()+" sum:"+wt.nSum);
+            nOps += wt.nSum;
+        }
+        System.out.println("tot sum:"+nOps);
+        System.out.println("ST ops:" +st.nOps);
+        nOps = 0;
+        for(ProcessorThread pt: pts) {
+            System.out.println(pt.getName()+" ops:"+pt.nOps);
+            nOps += pt.nOps;
+        }
+        System.out.println("tot ops:"+nOps);
+        System.out.println("sdq in:"+sdqIn.getSize());
+        System.out.println("sdq out:"+sdqOut.getSize());
+    }
+    
+}
+
+class SharedArray {
+    int[] dati;
+    Semaphore mutex = new Semaphore(1);
+
+    public SharedArray(int K) {
+        dati = new int[K];
+    }
+    
+    public int[] get() throws InterruptedException {
+        mutex.acquire();
+        int[] r = dati.clone();
+        mutex.release();
+        return r;
+    }
+    
+    public void add(int[] a) throws InterruptedException {
+        mutex.acquire();
+        for(int i=0; i<dati.length; i++) {
+            dati[i] += a[i];
+        }
+        mutex.release();
+    }
+}
+
+class SampleData {
+    int p;
+    int[] v;
+
+    public SampleData(int p, int[] v) {
+        this.p = p;
+        this.v = v;
+    }
+    
+    public String toString() {
+        return p+":"+Arrays.toString(v);
+    } 
+}
+
+class SampleDataQueue {
+    private ArrayList<SampleData> dati = new ArrayList<>();
+    private Semaphore mutex = new Semaphore(1);
+    private Semaphore pieni = new Semaphore(0);
+    private Semaphore vuoti = null;
+
+    public SampleDataQueue() {
+    }
+    
+    public SampleDataQueue(int S) {
+        vuoti = new Semaphore(S);
+    }
+    
+    public void add(SampleData sd) throws InterruptedException {
+        if(vuoti!=null) {
+            vuoti.acquire();
+        }
+        mutex.acquire();
+        dati.add(sd);
+        mutex.release();
+        pieni.release();
+    }
+    
+    public SampleData get1() throws InterruptedException {
+        pieni.acquire();
+        mutex.acquire();
+        SampleData r = dati.remove(0);
+        mutex.release();
+        if(vuoti!=null)
+            vuoti.release();
+        return r;
+    }
+    
+    public SampleData[] get(int n) throws InterruptedException {
+        pieni.acquire(n);
+        mutex.acquire();
+        SampleData[] r = new SampleData[n];
+        for(int i=0;i<n; i++)
+            r[i] = dati.remove(0);
+        mutex.release();
+        if(vuoti!=null)
+            vuoti.release(n);
+        return r;
+    }
+    
+    public int getSize() {
+        return dati.size();
+    }
+}
+
+class WriterThread extends Thread {
+    SharedArray sa;
+    int nSum = 0;
+    int TG, DG;
+    int K;
+
+    public WriterThread(SharedArray sa, int TG, int DG, int K) {
+        this.sa = sa;
+        this.TG = TG;
+        this.DG = DG;
+        this.K = K;
+    }
+    
+    public void run() {
+        try {
+            while(true) {
+                sleep(TG+(int)(Math.random() * DG));
+                int[] a = new int[K];
+                for(int i=0;i<K;i++)
+                    a[i] = 1;
+                sa.add(a);
+                nSum++;
+            }            
+        } catch(InterruptedException e) {
+            System.out.println(getName()+" interrotto");
+        }
+    }
+}
+
+class SamplerThread extends Thread {
+    SharedArray sa;
+    SampleDataQueue sdq;
+    int p = 0;
+    int T;
+    int nOps = 0;
+
+    public SamplerThread(SharedArray sa, SampleDataQueue sdq, int T) {
+        this.sa = sa;
+        this.sdq = sdq;
+        this.T = T;
+    }
+    
+    public void run() {
+        try {
+            while(true) {
+                int[] v = sa.get();
+                SampleData sd = new SampleData(p++, v);
+                sdq.add(sd);
+                nOps++;
+                sleep(T);
+            }
+        } catch(InterruptedException e) {
+            System.out.println(getName()+" interrotto");
+        }
+    }  
+}
+
+class ProcessorThread extends Thread {
+    SampleDataQueue sdqIn;
+    SampleDataQueue sdqOut;
+    int nOps = 0;
+
+    public ProcessorThread(SampleDataQueue sdqIn, SampleDataQueue sdqOut) {
+        this.sdqIn = sdqIn;
+        this.sdqOut = sdqOut;
+    }
+    
+    public void run() {
+        try {
+            while(true) {
+                SampleData[] in = sdqIn.get(2);
+                int[] diff = new int[in[0].v.length];
+                for(int i=0; i<diff.length; i++) {
+                    diff[i] = in[1].v[i] - in[0].v[i];
+                }
+                SampleData out = new SampleData(in[0].p, diff);
+                nOps++;
+                sdqOut.add(out);
+            }
+        } catch(InterruptedException e) {
+            System.out.println(getName()+" interrotto");
+        }
+    }
+}
+
+class PrinterThread extends Thread {
+    SampleDataQueue sdq;
+
+    public PrinterThread(SampleDataQueue sdq) {
+        this.sdq = sdq;
+    }
+    
+    public void run() {
+        try {
+            while(true) {
+                SampleData sd = sdq.get1();
+                System.out.println(getName()+" "+sd);
+            }
+        } catch(InterruptedException e) {
+            System.out.println(getName()+" interrotto");
+        }
+    }
+}
+
+
+
